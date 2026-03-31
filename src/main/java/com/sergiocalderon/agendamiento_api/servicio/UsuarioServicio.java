@@ -164,14 +164,29 @@ public Usuario actualizar(Integer id,
     return usuarioRepositorio.save(usuario);
 }
 
-    // Eliminar usuario
-    public void eliminar(Integer id) {
-        if (!usuarioRepositorio.existsById(id)) {
-            throw new RuntimeException(
-                "Usuario no encontrado con ID: " + id);
-        }
-        usuarioRepositorio.deleteById(id);
+@Transactional
+public void eliminar(Integer id) {
+
+    if (!usuarioRepositorio.existsById(id)) {
+        throw new RuntimeException(
+            "Usuario no encontrado con ID: " + id);
     }
+
+    // eliminar primero de cliente
+    entityManager.createNativeQuery(
+        "DELETE FROM cliente WHERE id_cliente = ?")
+        .setParameter(1, id)
+        .executeUpdate();
+
+    // eliminar de personal_administrativo (por si es admin)
+    entityManager.createNativeQuery(
+        "DELETE FROM personal_administrativo WHERE id_administrador = ?")
+        .setParameter(1, id)
+        .executeUpdate();
+
+    // ahora sí eliminar usuario
+    usuarioRepositorio.deleteById(id);
+}
 
     // Login - validar credenciales
     public Optional<Usuario> login(String email,
