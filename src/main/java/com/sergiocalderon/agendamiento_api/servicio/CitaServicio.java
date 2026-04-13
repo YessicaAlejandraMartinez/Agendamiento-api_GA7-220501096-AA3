@@ -20,52 +20,46 @@ public class CitaServicio {
     @Autowired
     private DisponibilidadRepositorio disponibilidadRepositorio;
 
-    // Listar todas las citas
+    @Autowired
+    private NotificacionServicio notificacionServicio;
+
     public List<Cita> listarTodas() {
         return citaRepositorio.findAll();
     }
 
-    // Buscar cita por ID
     public Optional<Cita> buscarPorId(Integer id) {
         return citaRepositorio.findById(id);
     }
 
-    // Listar citas por cliente
     public List<Cita> listarPorCliente(Integer idCliente) {
         return citaRepositorio.findByIdCliente(idCliente);
     }
 
-    // Listar citas por estado
     public List<Cita> listarPorEstado(String estado) {
         return citaRepositorio.findByEstado(estado);
     }
 
-    // Listar citas por fecha
     public List<Cita> listarPorFecha(LocalDate fecha) {
         return citaRepositorio.findByFechaCita(fecha);
     }
 
-    // Crear nueva cita — ocupa el cupo del horario
+    /* ── CREAR CITA ── */
     @Transactional
     public Cita crearCita(Cita cita) {
 
-        /* Verificar que el horario existe */
         if (cita.getIdDisponibilidad() != null) {
             Disponibilidad disp = disponibilidadRepositorio
                     .findById(cita.getIdDisponibilidad())
                     .orElseThrow(() -> new RuntimeException(
                             "Horario no encontrado"));
 
-            /* Verificar que aún hay cupos */
             if (disp.getCuposOcupados() >= disp.getCuposTotales()) {
                 throw new RuntimeException(
                         "Este horario ya no tiene cupos disponibles");
             }
 
-            /* Incrementar cupos ocupados */
             disp.setCuposOcupados(disp.getCuposOcupados() + 1);
 
-            /* Si se llenó completamente, marcarlo como no disponible */
             if (disp.getCuposOcupados() >= disp.getCuposTotales()) {
                 disp.setDisponible(false);
             }
@@ -73,12 +67,28 @@ public class CitaServicio {
             disponibilidadRepositorio.save(disp);
         }
 
-        /* Estado inicial PENDIENTE */
         cita.setEstado("PENDIENTE");
-        return citaRepositorio.save(cita);
+        Cita creado = citaRepositorio.save(cita);
+
+        // Notificar al cliente
+        notificacionServicio.notificarCitaAgendada(
+                creado.getIdCliente(),
+                creado.getIdCita(),
+                creado.getFechaCita().toString(),
+                creado.getHoraInicio().toString());
+
+        // Notificar al admin (ID 1 por defecto)
+        notificacionServicio.notificarAdminNuevaCita(
+                1,
+                creado.getIdCita(),
+                creado.getIdCliente(),
+                creado.getFechaCita().toString(),
+                creado.getHoraInicio().toString());
+
+        return creado;
     }
 
-    // Modificar cita
+    /* ── MODIFICAR CITA ── */
     @Transactional
     public Cita modificarCita(Integer id, Cita citaActualizada) {
         Cita cita = citaRepositorio.findById(id)
@@ -90,7 +100,7 @@ public class CitaServicio {
                     "Solo se pueden modificar citas en estado PENDIENTE");
         }
 
-        /* Liberar el cupo del horario anterior */
+        // Liberar cupo anterior
         if (cita.getIdDisponibilidad() != null) {
             disponibilidadRepositorio
                     .findById(cita.getIdDisponibilidad())
@@ -104,7 +114,7 @@ public class CitaServicio {
                     });
         }
 
-        /* Ocupar el nuevo horario */
+        // Ocupar nuevo cupo
         if (citaActualizada.getIdDisponibilidad() != null) {
             Disponibilidad dispNuevo = disponibilidadRepositorio
                     .findById(citaActualizada.getIdDisponibilidad())
@@ -116,7 +126,8 @@ public class CitaServicio {
                         "Este horario ya no tiene cupos disponibles");
             }
 
-            dispNuevo.setCuposOcupados(dispNuevo.getCuposOcupados() + 1);
+            dispNuevo.setCuposOcupados(
+                    dispNuevo.getCuposOcupados() + 1);
             if (dispNuevo.getCuposOcupados() >= dispNuevo.getCuposTotales()) {
                 dispNuevo.setDisponible(false);
             }
@@ -128,12 +139,13 @@ public class CitaServicio {
         cita.setHoraFin(citaActualizada.getHoraFin());
         cita.setTipoEvento(citaActualizada.getTipoEvento());
         cita.setMotivoCita(citaActualizada.getMotivoCita());
-        cita.setIdDisponibilidad(citaActualizada.getIdDisponibilidad());
+        cita.setIdDisponibilidad(
+                citaActualizada.getIdDisponibilidad());
 
         return citaRepositorio.save(cita);
     }
 
-    // Confirmar cita
+    /* ── CONFIRMAR CITA ── */
     public Cita confirmarCita(Integer id) {
         Cita cita = citaRepositorio.findById(id)
                 .orElseThrow(() -> new RuntimeException(
@@ -141,14 +153,23 @@ public class CitaServicio {
 
         if (!"PENDIENTE".equals(cita.getEstado())) {
             throw new RuntimeException(
-                    "Solo se pueden confirmar citas en estado PENDIENTE");
+                    "Solo se pueden confirmar citas PENDIENTE");
         }
 
         cita.setEstado("CONFIRMADA");
-        return citaRepositorio.save(cita);
+        Cita confirmada = citaRepositorio.save(cita);
+
+        // Notificar al cliente
+        notificacionServicio.notificarCitaConfirmada(
+                confirmada.getIdCliente(),
+                id,
+                confirmada.getFechaCita().toString(),
+                confirmada.getHoraInicio().toString());
+
+        return confirmada;
     }
 
-    // Cancelar cita — libera el cupo del horario
+    /* ── CANCELAR CITA ── */
     @Transactional
     public Cita cancelarCita(Integer id, String motivo) {
         Cita cita = citaRepositorio.findById(id)
@@ -156,10 +177,11 @@ public class CitaServicio {
                         "Cita no encontrada con ID: " + id));
 
         if ("CANCELADA".equals(cita.getEstado())) {
-            throw new RuntimeException("La cita ya está cancelada");
+            throw new RuntimeException(
+                    "La cita ya está cancelada");
         }
 
-        /* Liberar el cupo del horario */
+        // Liberar cupo
         if (cita.getIdDisponibilidad() != null) {
             disponibilidadRepositorio
                     .findById(cita.getIdDisponibilidad())
@@ -167,7 +189,6 @@ public class CitaServicio {
                         if (disp.getCuposOcupados() > 0) {
                             disp.setCuposOcupados(
                                     disp.getCuposOcupados() - 1);
-                            /* Reactivar el horario si tenía cupos */
                             disp.setDisponible(true);
                             disponibilidadRepositorio.save(disp);
                         }
@@ -176,17 +197,26 @@ public class CitaServicio {
 
         cita.setEstado("CANCELADA");
         cita.setMotivoCancelacion(motivo);
-        return citaRepositorio.save(cita);
+        Cita cancelada = citaRepositorio.save(cita);
+
+        // Notificar al cliente
+        notificacionServicio.notificarCitaCancelada(
+                cancelada.getIdCliente(),
+                id,
+                cancelada.getFechaCita().toString(),
+                motivo);
+
+        return cancelada;
     }
 
-    // Eliminar cita — libera el cupo
+    /* ── ELIMINAR CITA ── */
     @Transactional
     public void eliminarCita(Integer id) {
         Cita cita = citaRepositorio.findById(id)
                 .orElseThrow(() -> new RuntimeException(
                         "Cita no encontrada con ID: " + id));
 
-        /* Liberar cupo si la cita no estaba cancelada */
+        // Liberar cupo si no estaba cancelada
         if (!"CANCELADA".equals(cita.getEstado()) &&
                 cita.getIdDisponibilidad() != null) {
             disponibilidadRepositorio
